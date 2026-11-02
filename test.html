@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EngLoop 音読チェック 試作</title>
+  
+  <meta charset="utf-8">
+  <style>
+  :root {
+    --bg: #ffffff;
+    --surface: #f4f6fb;
+    --text: #1b1f2a;
+    --muted: #5a6274;
+    --line: #cfd6e4;
+    --primary: #2f55d4;
+    --primary-text: #ffffff;
+    --ok: #1f7a3d;
+    --err: #c62828;
+    --warn: #b7860b;
+    --omit: #7a7f8c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151c;
+      --surface: #1c212b;
+      --text: #e8ebf2;
+      --muted: #a4abba;
+      --line: #343b4a;
+      --primary: #7c9bff;
+      --primary-text: #0b0f18;
+      --ok: #5cc483;
+      --err: #ff7a7a;
+      --warn: #e6c25a;
+      --omit: #9aa0ad;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 22px; margin: 8px 0 16px; }
+  h2 { font-size: 18px; margin: 0 0 8px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px;
+    margin: 0 0 16px;
+  }
+  button, select, input[type=file] {
+    min-height: 48px;
+    font-size: 16px;
+  }
+  button {
+    padding: 0 18px;
+    border-radius: 10px;
+    border: 2px solid var(--primary);
+    background: var(--primary);
+    color: var(--primary-text);
+    cursor: pointer;
+  }
+  button.sub { background: transparent; color: var(--primary); }
+  button:disabled { opacity: .45; cursor: default; }
+  select { padding: 0 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+  .small { font-size: 13px; color: var(--muted); }
+  .msg-err { color: var(--err); font-weight: 600; }
+  .msg-ok { color: var(--ok); font-weight: 600; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 6px 4px; text-align: left; }
+</style>
+
+  <style>
+    .meter { height: 16px; background: var(--line); border-radius: 8px; overflow: hidden; }
+    .meter > div { height: 100%; width: 0; background: var(--ok); transition: width .08s; }
+    .passage { font-size: 19px; line-height: 1.9; }
+    .w-mis { text-decoration: underline 3px var(--err); text-underline-offset: 4px; }
+    .w-omit { color: var(--omit); text-decoration: line-through 2px; }
+    .w-insert { color: var(--omit); font-size: 13px; vertical-align: super; }
+    .bar { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; margin-top: 6px; }
+    .bar > div { height: 100%; width: 0; background: var(--primary); }
+    textarea { width: 100%; min-height: 120px; font: 13px monospace; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; }
+    #pitchWrap { position: relative; height: 220px; }
+    #micMsg, #readMsg, #loadMsg { white-space: pre-line; }
+  </style>
+</head>
+<body>
+<main class="wrap">
+  <h1>音読チェック 試作（教員用）</h1>
+  <p class="small">声はこの端末の外に送られず、保存もされません。結果を出したら録音は捨てます。</p>
+
+  <section class="card" aria-labelledby="h-dev">
+    <h2 id="h-dev">1. 端末</h2>
+    <table><tbody id="devTable"></tbody></table>
+    <p id="lastStep" class="msg-err" hidden></p>
+  </section>
+
+  <section class="card" aria-labelledby="h-mic">
+    <h2 id="h-mic">2. マイクを試す</h2>
+    <div class="row">
+      <button id="btnMic">マイクを試す</button>
+      <button id="btnMicStop" class="sub" disabled>止める</button>
+    </div>
+    <div class="meter" aria-label="音量"><div id="meterBar"></div></div>
+    <p id="micMsg" class="small">押すと、マイクの許可を求めます。</p>
+  </section>
+
+  <section class="card" aria-labelledby="h-model">
+    <h2 id="h-model">3. モデルを読み込む</h2>
+    <div class="row">
+      <label>モデル
+        <select id="selModel">
+          <option value="onnx-community/whisper-tiny.en_timestamped">tiny.en（小さい）</option>
+          <option value="onnx-community/whisper-base.en_timestamped">base.en（少し大きい）</option>
+        </select>
+      </label>
+      <label>方式
+        <select id="selDevice">
+          <option value="wasm">WASM</option>
+          <option value="webgpu">WebGPU</option>
+        </select>
+      </label>
+      <label>精度
+        <select id="selDtype">
+          <option value="q8">q8（軽い）</option>
+          <option value="fp16">fp16</option>
+          <option value="fp32">fp32（重い）</option>
+        </select>
+      </label>
+    </div>
+    <div class="row"><button id="btnLoad">モデルを読み込む</button></div>
+    <div class="bar" aria-label="読み込みの進み具合"><div id="loadBar"></div></div>
+    <p id="loadMsg" class="small">まだ読み込んでいません。</p>
+  </section>
+
+  <section class="card" aria-labelledby="h-read">
+    <h2 id="h-read">4. 読む</h2>
+    <p class="small">次の英文を、ふつうの速さで読んでください（Claude が書いたオリジナルの文。教科書の本文ではありません）。</p>
+    <p id="passage" class="passage"></p>
+    <div class="row">
+      <button id="btnRec" disabled>読み始める</button>
+      <button id="btnRecStop" class="sub" disabled>終わる</button>
+      <span id="recTime" class="small">0.0 秒</span>
+    </div>
+    <div class="row">
+      <label class="small">音声ファイルで試す
+        <input id="fileIn" type="file" accept="audio/*" disabled>
+      </label>
+    </div>
+    <p id="readMsg" class="small">先にモデルを読み込んでください。</p>
+  </section>
+
+  <section class="card" aria-labelledby="h-res" id="resCard" hidden>
+    <h2 id="h-res">5. 結果</h2>
+    <table><tbody id="sumTable"></tbody></table>
+    <h2 style="margin-top:16px">本文との比べ</h2>
+    <p class="small">赤の下線＝別の語に聞こえた　取り消し線＝読み飛ばし　小さい灰色＝本文にない語</p>
+    <p id="alignOut" class="passage"></p>
+    <h2 style="margin-top:16px">書き起こし</h2>
+    <p id="hypOut"></p>
+    <h2 style="margin-top:16px">声の高さ（半音。録音全体の中央値＝0）</h2>
+    <div id="pitchWrap"><canvas id="pitchChart" aria-label="声の高さのグラフ"></canvas></div>
+    <p id="pitchNote" class="small"></p>
+    <details>
+      <summary>単語ごとの時刻</summary>
+      <table><thead><tr><th>語</th><th>開始（秒）</th><th>終了（秒）</th></tr></thead><tbody id="wordTable"></tbody></table>
+    </details>
+    <h2 style="margin-top:16px">報告</h2>
+    <p class="small">音声と書き起こしの全文は入りません。</p>
+    <div class="row"><button id="btnCopy">報告用にコピー</button><span id="copyMsg" class="small"></span></div>
+    <textarea id="reportOut" readonly aria-label="報告の中身"></textarea>
+  </section>
+</main>
+
+<script>
+// 音読チェックの判定に使う関数（画面の部品に頼らない。Node でもテストする）
+// 音声の数字はこの関数の中だけで使い、どこにも送らない
+// <engine>
+var READING_DEFAULTS = {
+  sampleRate: 16000,
+  frameMs: 10,
+  pauseSec: 0.6,
+  silenceDb: -45,
+  minVoicedRatio: 0.2,
+  pitchMin: 70,
+  pitchMax: 400
+};
+
+// 録音の周波数（48kHz・44.1kHz など）を 16kHz に直す
+// 8kHz より上の音が折り返して雑音にならないよう、窓付き sinc（カットオフ 7kHz）で間引く
+var RESAMPLE_HALF_ = 32;   // 片側の入力サンプル数
+var RESAMPLE_RES_ = 256;   // 表の細かさ（1サンプルあたり）
+function resampleTo16k_(samples, srcRate) {
+  if (srcRate === 16000) return samples;
+  var n = Math.round(samples.length * 16000 / srcRate), out = new Float32Array(n);
+  var step = srcRate / 16000, fc = Math.min(7000, 0.45 * Math.min(srcRate, 16000)) / srcRate;
+  var N = RESAMPLE_HALF_, R = RESAMPLE_RES_, table = new Float32Array(N * R + 2);
+  for (var k = 0; k < table.length; k++) {
+    var t = k / R, sinc = t === 0 ? 1 : Math.sin(2 * Math.PI * fc * t) / (2 * Math.PI * fc * t);
+    var w = t >= N ? 0 : 0.42 + 0.5 * Math.cos(Math.PI * t / N) + 0.08 * Math.cos(2 * Math.PI * t / N); // Blackman
+    table[k] = 2 * fc * sinc * w;
+  }
+  for (var i = 0; i < n; i++) {
+    var x = i * step, j0 = Math.floor(x), sum = 0, norm = 0;
+    for (var m = j0 - N + 1; m <= j0 + N; m++) {
+      var d = Math.abs(x - m) * R, q = Math.floor(d);
+      if (q >= N * R) continue;
+      var h = table[q] + (table[q + 1] - table[q]) * (d - q);
+      norm += h;
+      if (m >= 0 && m < samples.length) sum += samples[m] * h;
+    }
+    out[i] = norm ? sum / norm : 0;
+  }
+  return out;
+}
+
+// 枠ごとの音量（dBFS）。無音は -100
+function frameRms_(samples, rate, frameMs) {
+  var size = Math.round(rate * frameMs / 1000), out = [];
+  for (var s = 0; s + size <= samples.length; s += size) {
+    var sum = 0;
+    for (var i = s; i < s + size; i++) sum += samples[i] * samples[i];
+    var rms = Math.sqrt(sum / size);
+    out.push(rms > 0 ? Math.max(-100, 20 * Math.log10(rms)) : -100);
+  }
+  return out;
+}
+
+// silenceDb 未満が minSec 秒以上続いた区間（秒）
+function findSilences_(rmsDb, frameMs, silenceDb, minSec) {
+  var out = [], start = -1, sec = frameMs / 1000;
+  for (var i = 0; i <= rmsDb.length; i++) {
+    var quiet = i < rmsDb.length && rmsDb[i] < silenceDb;
+    if (quiet && start < 0) start = i;
+    if (!quiet && start >= 0) {
+      if ((i - start) * sec >= minSec) out.push({ start: start * sec, end: i * sec });
+      start = -1;
+    }
+  }
+  return out;
+}
+
+// 声のある枠が minVoicedRatio 未満なら true
+function isMostlySilent_(rmsDb, silenceDb, minVoicedRatio) {
+  if (!rmsDb.length) return true;
+  var voiced = 0;
+  for (var i = 0; i < rmsDb.length; i++) if (rmsDb[i] >= silenceDb) voiced++;
+  return voiced / rmsDb.length < minVoicedRatio;
+}
+
+// YIN で基本周波数（Hz）を出す。声がなければ 0
+function yinPitch_(frame, rate, fmin, fmax) {
+  var tauMin = Math.floor(rate / fmax), tauMax = Math.floor(rate / fmin);
+  var w = frame.length - tauMax;
+  if (w <= 0) return 0;
+  var energy = 0;
+  for (var k = 0; k < frame.length; k++) energy += frame[k] * frame[k];
+  if (energy / frame.length < 1e-8) return 0;
+  var d = new Float32Array(tauMax + 1), cmnd = new Float32Array(tauMax + 1), run = 0;
+  cmnd[0] = 1;
+  for (var tau = 1; tau <= tauMax; tau++) {
+    var sum = 0;
+    for (var j = 0; j < w; j++) { var diff = frame[j] - frame[j + tau]; sum += diff * diff; }
+    d[tau] = sum;
+    run += sum;
+    cmnd[tau] = run > 0 ? sum * tau / run : 1;
+  }
+  for (var t = Math.max(2, tauMin); t < tauMax; t++) {
+    if (cmnd[t] < 0.15) {
+      while (t + 1 < tauMax && cmnd[t + 1] < cmnd[t]) t++;
+      // 放物線で補間して、より正確な周期を出す
+      var a = cmnd[t - 1], b = cmnd[t], c = cmnd[t + 1], den = a - 2 * b + c;
+      var shift = den !== 0 ? 0.5 * (a - c) / den : 0;
+      return rate / (t + shift);
+    }
+  }
+  return 0;
+}
+
+// 10ms ごとの基本周波数（窓 40ms）
+function pitchTrack_(samples, rate) {
+  var hop = Math.round(rate * 0.01), win = Math.round(rate * 0.04), out = [];
+  for (var s = 0; s + win <= samples.length; s += hop) {
+    out.push(yinPitch_(samples.subarray(s, s + win), rate, READING_DEFAULTS.pitchMin, READING_DEFAULTS.pitchMax));
+  }
+  return out;
+}
+
+// 0 を除いた中央値を 0 とした半音。0 は null
+function toSemitones_(hz) {
+  var v = hz.filter(function (x) { return x > 0; }).sort(function (a, b) { return a - b; });
+  if (!v.length) return hz.map(function () { return null; });
+  var m = v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2;
+  return hz.map(function (x) { return x > 0 ? 12 * Math.log2(x / m) : null; });
+}
+
+var NUM_WORDS_ = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+  'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'];
+var TENS_WORDS_ = { 30: 'thirty', 40: 'forty', 50: 'fifty', 60: 'sixty', 70: 'seventy', 80: 'eighty', 90: 'ninety', 100: 'hundred' };
+var CONTRACTION_SPECIAL_ = { "can't": ['can', 'not'], "won't": ['will', 'not'], "shan't": ['shall', 'not'], "let's": ['let', 'us'] };
+var CONTRACTION_SUFFIX_ = [["n't", 'not'], ["'re", 'are'], ["'m", 'am'], ["'ll", 'will'], ["'ve", 'have'], ["'d", 'would'], ["'s", 'is']];
+
+// 小文字・記号なしの単語の列にする。数字と短縮形はそろえる
+function tokenize_(text) {
+  var raw = String(text || '').toLowerCase().replace(/[‘’`]/g, "'").split(/[^a-z0-9']+/);
+  var out = [];
+  raw.forEach(function (w) {
+    w = w.replace(/^'+|'+$/g, '');
+    if (!w) return;
+    if (/^\d+$/.test(w)) {
+      var n = Number(w);
+      if (n <= 20) w = NUM_WORDS_[n];
+      else if (TENS_WORDS_[n]) w = TENS_WORDS_[n];
+      out.push(w);
+      return;
+    }
+    if (CONTRACTION_SPECIAL_[w]) { out.push.apply(out, CONTRACTION_SPECIAL_[w]); return; }
+    for (var i = 0; i < CONTRACTION_SUFFIX_.length; i++) {
+      var suf = CONTRACTION_SUFFIX_[i][0];
+      if (w.length > suf.length && w.slice(-suf.length) === suf) {
+        out.push(w.slice(0, -suf.length), CONTRACTION_SUFFIX_[i][1]);
+        return;
+      }
+    }
+    out.push(w);
+  });
+  return out;
+}
+
+// 本文（ref）と書き起こし（hyp）を対応づける（Needleman–Wunsch。一致 0、置換・挿入・脱落 1）
+function alignWords_(ref, hyp) {
+  var n = ref.length, m = hyp.length, D = [];
+  for (var i = 0; i <= n; i++) { D.push(new Array(m + 1)); D[i][0] = i; }
+  for (var j = 0; j <= m; j++) D[0][j] = j;
+  for (i = 1; i <= n; i++) {
+    for (j = 1; j <= m; j++) {
+      var sub = D[i - 1][j - 1] + (ref[i - 1] === hyp[j - 1] ? 0 : 1);
+      D[i][j] = Math.min(sub, D[i - 1][j] + 1, D[i][j - 1] + 1);
+    }
+  }
+  var out = [];
+  i = n; j = m;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && D[i][j] === D[i - 1][j - 1] + (ref[i - 1] === hyp[j - 1] ? 0 : 1)) {
+      out.push({ ref: ref[i - 1], hyp: hyp[j - 1], type: ref[i - 1] === hyp[j - 1] ? 'ok' : 'mis' });
+      i--; j--;
+    } else if (i > 0 && D[i][j] === D[i - 1][j] + 1) {
+      out.push({ ref: ref[i - 1], hyp: null, type: 'omit' });
+      i--;
+    } else {
+      out.push({ ref: null, hyp: hyp[j - 1], type: 'insert' });
+      j--;
+    }
+  }
+  return out.reverse();
+}
+// </engine>
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+  var TF_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1';
+  var PASSAGE = 'Every morning, Mika walks to the station with her younger brother. On the way, they pass a small bakery that opens at six. The smell of fresh bread always makes them hungry, but they never have time to stop. One rainy day, the train was delayed, so they finally went inside. The baker, an old man with flour on his glasses, gave them two warm rolls and refused to take any money. "Come back when the sun is out," he said with a smile. Since then, the children leave home ten minutes earlier. They still cannot buy much, but they always say good morning to the baker. Small habits like this, Mika thinks, can make an ordinary street feel like home.';
+  var MAX_SEC = 150;
+  var STEP_KEY = 'engloop_readingTest_step';
+  var FAKE = (location.search.match(/[?&]fake=(\w+)/) || [])[1] || '';
+  var STEP_NAMES = { mic: 'マイクを試す', load: 'モデルの読み込み', rec: '録音', asr: '採点（音声認識）' };
+
+  var $ = function (id) { return document.getElementById(id); };
+  var report = { errors: [] };
+  var asr = null;        // { run(audio) -> Promise, runner }
+  var chart = null;
+
+  // 端末の時計での「YYYY-MM-DD HH:MM」
+  function localTime() {
+    var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+
+  // ---- 手順の記録（ページごと落ちたときに、どこで止まったかを残す）----
+  function stepStart(name) { try { localStorage.setItem(STEP_KEY, JSON.stringify({ step: name, at: localTime() })); } catch (e) {} }
+  function stepEnd() { try { localStorage.removeItem(STEP_KEY); } catch (e) {} }
+  function showLastStep() {
+    var v = null;
+    try { v = JSON.parse(localStorage.getItem(STEP_KEY) || 'null'); } catch (e) {}
+    if (FAKE === 'crash') v = { step: 'asr', at: localTime() };
+    if (v && STEP_NAMES[v.step]) {
+      $('lastStep').textContent = '前回は「' + STEP_NAMES[v.step] + '」の途中で止まりました（' + v.at + '）。メモリ不足などで落ちた可能性があります。報告に書いてください。';
+      $('lastStep').hidden = false;
+      report.lastCrashStep = v.step;
+      stepEnd();
+    }
+  }
+  function addError(where, e) {
+    var name = (e && e.name) || 'Error', msg = (e && e.message) || String(e);
+    report.errors.push({ where: where, name: name, message: String(msg).slice(0, 200) });
+    return name + '：' + msg;
+  }
+
+  // ---- 1. 端末 ----
+  function deviceType() {
+    var ua = navigator.userAgent;
+    if (/iPhone|iPad|iPod/.test(ua)) return 'iPhone';
+    if (/Android/.test(ua)) return 'Android';
+    return 'other';
+  }
+  function fillDevice() {
+    report.device = deviceType();
+    report.audioWorklet = typeof AudioWorkletNode !== 'undefined';
+    report.webgpu = !!navigator.gpu;
+    report.crossOriginIsolated = !!window.crossOriginIsolated;
+    var rows = [['端末の種類', report.device], ['AudioWorklet', report.audioWorklet ? 'あり' : 'なし'],
+      ['WebGPU', report.webgpu ? 'あり' : 'なし'], ['crossOriginIsolated', String(report.crossOriginIsolated)]];
+    $('devTable').innerHTML = rows.map(function (r) { return '<tr><th>' + r[0] + '</th><td>' + r[1] + '</td></tr>'; }).join('');
+    if (!report.webgpu) $('selDevice').querySelector('[value=webgpu]').disabled = true;
+  }
+
+  // ---- 録音（マイクの試しと読むときで共通）----
+  var audio = { ctx: null, stream: null, node: null, src: null, mute: null, chunks: [], keep: false, workletReady: null, lastMeter: 0 };
+  var WORKLET = 'class P extends AudioWorkletProcessor{process(i){if(i[0]&&i[0][0])this.port.postMessage(i[0][0].slice(0));return true}}registerProcessor("rec-p",P);';
+
+  // AudioWorklet の部品は1回だけ読み込む（2回目の登録は失敗するため）
+  function loadWorklet() {
+    if (!audio.workletReady) {
+      var url = URL.createObjectURL(new Blob([WORKLET], { type: 'text/javascript' }));
+      audio.workletReady = audio.ctx.audioWorklet.addModule(url).then(function () { URL.revokeObjectURL(url); });
+    }
+    return audio.workletReady;
+  }
+  function openMic() {
+    if (FAKE === 'micDenied') return Promise.reject({ name: 'NotAllowedError', message: '（プレビューの偽の失敗）Permission denied' });
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      return Promise.reject({ name: 'NotSupportedError', message: 'このブラウザ（またはこの枠の中）ではマイクを使えません' });
+    }
+    closeMic(); // すでに開いていれば閉じてから（マイクを二重に開かない）
+    audio.ctx = audio.ctx || new (window.AudioContext || window.webkitAudioContext)();
+    return audio.ctx.resume().then(function () {
+      return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    }).then(function (stream) {
+      audio.stream = stream;
+      audio.src = audio.ctx.createMediaStreamSource(stream);
+      report.sampleRate = audio.ctx.sampleRate;
+      // 音を出さない出口（iOS Safari では出口までつながっていないと処理されないことがある）
+      audio.mute = audio.ctx.createGain(); audio.mute.gain.value = 0; audio.mute.connect(audio.ctx.destination);
+      if (audio.ctx.audioWorklet) {
+        return loadWorklet().then(function () {
+          audio.node = new AudioWorkletNode(audio.ctx, 'rec-p');
+          audio.node.port.onmessage = function (e) { onChunk(e.data); };
+          audio.src.connect(audio.node); audio.node.connect(audio.mute);
+          report.recorder = 'AudioWorklet';
+        });
+      }
+      throw new Error('no worklet');
+    }).catch(function (e) {
+      if (audio.stream && !audio.node) {
+        // AudioWorklet が使えないときは ScriptProcessor
+        var sp = audio.ctx.createScriptProcessor(4096, 1, 1);
+        sp.onaudioprocess = function (ev) { onChunk(ev.inputBuffer.getChannelData(0).slice(0)); };
+        audio.src.connect(sp); sp.connect(audio.mute);
+        audio.node = sp;
+        report.recorder = 'ScriptProcessor';
+        return;
+      }
+      closeMic();
+      throw e;
+    });
+  }
+  function closeMic() {
+    if (audio.node) { try { audio.node.disconnect(); } catch (e) {} audio.node = null; }
+    if (audio.src) { try { audio.src.disconnect(); } catch (e) {} audio.src = null; }
+    if (audio.mute) { try { audio.mute.disconnect(); } catch (e) {} audio.mute = null; }
+    if (audio.stream) { audio.stream.getTracks().forEach(function (t) { t.stop(); }); audio.stream = null; }
+    $('meterBar').style.width = '0';
+    $('btnMic').disabled = busy; $('btnMicStop').disabled = true;
+  }
+  function onChunk(f32) {
+    if (audio.keep) audio.chunks.push(f32);
+    var now = performance.now();
+    if (now - audio.lastMeter < 100) return; // メーターの描き直しは 100ms ごと
+    audio.lastMeter = now;
+    var sum = 0;
+    for (var i = 0; i < f32.length; i++) sum += f32[i] * f32[i];
+    var db = 20 * Math.log10(Math.sqrt(sum / f32.length) || 1e-5);
+    $('meterBar').style.width = Math.max(0, Math.min(100, (db + 60) * 100 / 60)) + '%';
+  }
+
+  // 録音・採点の間は、ほかの入力を押せないようにする（二重の録音・結果の入れ替わりを防ぐ）
+  var busy = false;
+  function setBusy(b) {
+    busy = b;
+    $('btnRec').disabled = b || !asr;
+    $('fileIn').disabled = b || !asr;
+    $('btnMic').disabled = b || !!audio.stream;
+    $('btnLoad').disabled = b || !!asr;
+  }
+  function micErrorText(e) {
+    var t = addError('mic', e);
+    if (e && e.name === 'NotAllowedError') t += '\nマイクの許可が出ていないか、この枠の中では許可できません。ブラウザの設定でマイクを許可して、もう一度押してください。';
+    return t;
+  }
+
+  // ---- 2. マイクを試す ----
+  $('btnMic').onclick = function () {
+    $('btnMic').disabled = true;
+    stepStart('mic');
+    $('micMsg').className = 'small'; $('micMsg').textContent = '許可を待っています…';
+    openMic().then(function () {
+      $('micMsg').className = 'msg-ok';
+      $('micMsg').textContent = 'マイクが使えます（' + report.recorder + '、' + report.sampleRate + ' Hz）。声を出すとメーターが動きます。';
+      report.micOk = true;
+      $('btnMic').disabled = true; $('btnMicStop').disabled = false;
+      stepEnd();
+    }).catch(function (e) {
+      report.micOk = false;
+      $('micMsg').className = 'msg-err'; $('micMsg').textContent = 'マイクが使えません。' + micErrorText(e);
+      $('btnMic').disabled = busy;
+      stepEnd();
+    });
+  };
+  $('btnMicStop').onclick = function () { closeMic(); };
+
+  // ---- 3. モデルを読み込む（Web Worker。作れなければ画面のスレッド）----
+  var WORKER_SRC = [
+    'import { pipeline, env } from "' + TF_URL + '";',
+    'env.allowLocalModels = false;',
+    'let asr = null;',
+    'self.onmessage = async (e) => {',
+    '  const m = e.data;',
+    '  try {',
+    '    if (m.type === "load") {',
+    '      asr = await pipeline("automatic-speech-recognition", m.model, { device: m.device, dtype: m.dtype,',
+    '        progress_callback: (p) => self.postMessage({ type: "progress", p }) });',
+    '      self.postMessage({ id: m.id, type: "loaded" });',
+    '    } else if (m.type === "run") {',
+    '      const out = await asr(m.audio, { return_timestamps: "word", chunk_length_s: 30, stride_length_s: 5 });',
+    '      self.postMessage({ id: m.id, type: "result", out });',
+    '    }',
+    '  } catch (err) { self.postMessage({ id: m.id, type: "error", name: err && err.name, message: String(err && err.message || err) }); }',
+    '};'
+  ].join('\n');
+  var LOAD_TIMEOUT_MS = 180000;
+  function runTimeoutMs(a) { return Math.round(a.length / 16000 * 3 * 1000) + 30000; } // 録音の長さ×3＋30秒
+
+  // 時間を過ぎたら失敗にする（Worker が何も言わずに止まったときに、画面が固まらないように）
+  function withTimeout(p, ms, onTimeout) {
+    var timer;
+    return Promise.race([p, new Promise(function (_, rej) {
+      timer = setTimeout(function () { if (onTimeout) onTimeout(); rej({ name: 'Timeout', message: Math.round(ms / 1000) + ' 秒たっても終わりませんでした' }); }, ms);
+    })]).then(function (v) { clearTimeout(timer); return v; }, function (e) { clearTimeout(timer); throw e; });
+  }
+
+  function makeWorkerRunner(onProgress) {
+    var url = URL.createObjectURL(new Blob([WORKER_SRC], { type: 'text/javascript' }));
+    var w = new Worker(url, { type: 'module' }), seq = 0, pending = {};
+    function failAll(err) { Object.keys(pending).forEach(function (k) { pending[k].reject(err); delete pending[k]; }); }
+    w.onmessage = function (e) {
+      var m = e.data;
+      if (m.type === 'progress') { onProgress(m.p); return; }
+      var p = pending[m.id];
+      if (!p) return;
+      delete pending[m.id];
+      if (m.type === 'error') p.reject({ name: m.name || 'Error', message: m.message });
+      else p.resolve(m.out);
+    };
+    w.onerror = function (e) { failAll({ name: 'WorkerError', message: e.message || 'Worker を動かせませんでした' }); };
+    function terminate() { try { w.terminate(); } catch (e) {} URL.revokeObjectURL(url); failAll({ name: 'Terminated', message: 'Worker を止めました' }); }
+    function call(msg, transfer, ms) {
+      msg.id = ++seq;
+      var p = new Promise(function (res, rej) { pending[msg.id] = { resolve: res, reject: rej }; w.postMessage(msg, transfer || []); });
+      return withTimeout(p, ms, terminate);
+    }
+    return {
+      runner: 'worker',
+      terminate: terminate,
+      load: function (o) { return call({ type: 'load', model: o.model, device: o.device, dtype: o.dtype }, [], LOAD_TIMEOUT_MS); },
+      run: function (a) { var ms = runTimeoutMs(a); return call({ type: 'run', audio: a }, [a.buffer], ms); }
+    };
+  }
+  function makeMainRunner(onProgress) {
+    var pipe = null;
+    return {
+      runner: 'main',
+      terminate: function () { pipe = null; },
+      load: function (o) {
+        return withTimeout(import(TF_URL).then(function (tf) {
+          tf.env.allowLocalModels = false;
+          return tf.pipeline('automatic-speech-recognition', o.model, { device: o.device, dtype: o.dtype, progress_callback: onProgress });
+        }).then(function (p) { pipe = p; }), LOAD_TIMEOUT_MS);
+      },
+      run: function (a) { return withTimeout(pipe(a, { return_timestamps: 'word', chunk_length_s: 30, stride_length_s: 5 }), runTimeoutMs(a)); }
+    };
+  }
+
+  $('btnLoad').onclick = function () {
+    var opt = { model: $('selModel').value, device: $('selDevice').value, dtype: $('selDtype').value };
+    var files = {}, t0 = performance.now();
+    function onProgress(p) {
+      if (!p || !p.file) return;
+      if (p.total) files[p.file] = { loaded: p.loaded || 0, total: p.total };
+      if (p.status === 'done' && files[p.file]) files[p.file].loaded = files[p.file].total;
+      var L = 0, T = 0;
+      Object.keys(files).forEach(function (k) { L += files[k].loaded; T += files[k].total; });
+      if (T) {
+        $('loadBar').style.width = Math.round(L * 100 / T) + '%';
+        $('loadMsg').textContent = '読み込み中… ' + (L / 1048576).toFixed(1) + ' / ' + (T / 1048576).toFixed(1) + ' MB';
+      }
+    }
+    function finish(runner) {
+      var sec = (performance.now() - t0) / 1000, T = 0;
+      Object.keys(files).forEach(function (k) { T += files[k].total; });
+      asr = runner;
+      report.model = opt.model.split('/')[1]; report.modelDevice = opt.device; report.dtype = opt.dtype;
+      report.runner = runner.runner; report.modelMB = Number((T / 1048576).toFixed(1)); report.loadSec = Number(sec.toFixed(1));
+      $('loadBar').style.width = '100%';
+      $('loadMsg').className = 'msg-ok';
+      $('loadMsg').textContent = '読み込みました（' + (runner.runner === 'worker' ? 'Web Worker' : '画面のスレッド') + '、' + report.modelMB + ' MB、' + report.loadSec + ' 秒）。2回目からは保存されたデータを使うので速くなるはずです。';
+      setBusy(false);
+      $('readMsg').className = 'small'; $('readMsg').textContent = '「読み始める」を押して読んでください。';
+      stepEnd();
+    }
+    function fail(e) {
+      $('loadMsg').className = 'msg-err';
+      $('loadMsg').textContent = '読み込めませんでした（' + addError('load', e) + '）。Wi-Fi を確かめて、もう一度押してください。';
+      $('btnLoad').disabled = false;
+      stepEnd();
+    }
+    $('btnLoad').disabled = true; $('loadMsg').className = 'small'; $('loadMsg').textContent = '準備しています…';
+    stepStart('load');
+    if (FAKE === 'modelFail') { fail({ name: 'NetworkError', message: '（プレビューの偽の失敗）Failed to fetch' }); return; }
+    var w;
+    try { w = makeWorkerRunner(onProgress); } catch (e) { addError('worker', e); w = null; }
+    var first = w ? w.load(opt).then(function () { return w; }) : Promise.reject({ name: 'NoWorker' });
+    first.then(finish).catch(function (e) {
+      // 途中まで読んだ Worker を止めてから切り替える（メモリを二重に使わない）
+      if (w) { addError('worker', e); w.terminate(); }
+      files = {};
+      var m = makeMainRunner(onProgress);
+      return m.load(opt).then(function () { finish(m); });
+    }).catch(fail);
+  };
+
+  // ---- 4. 読む ----
+  var recTimer = null, recT0 = 0;
+  $('passage').textContent = PASSAGE;
+  $('btnRec').onclick = function () {
+    if (busy) return;
+    setBusy(true); // 押した瞬間に止める（連打でマイクを二重に開かない）
+    stepStart('rec');
+    if (audio.ctx) audio.ctx.resume(); // iOS で画面ロック・着信のあとに止まっていることがある
+    var go = audio.stream ? Promise.resolve() : openMic();
+    go.then(function () {
+      audio.chunks = []; audio.keep = true; recT0 = performance.now();
+      $('btnRecStop').disabled = false; $('btnMicStop').disabled = true;
+      $('readMsg').className = 'small'; $('readMsg').textContent = '録音しています。読み終えたら「終わる」を押してください。';
+      if (recTimer) clearInterval(recTimer);
+      recTimer = setInterval(function () {
+        var s = (performance.now() - recT0) / 1000;
+        $('recTime').textContent = s.toFixed(1) + ' 秒';
+        if (s >= MAX_SEC) stopRec();
+      }, 100);
+    }).catch(function (e) {
+      $('readMsg').className = 'msg-err'; $('readMsg').textContent = 'マイクが使えません。' + micErrorText(e);
+      setBusy(false);
+      stepEnd();
+    });
+  };
+  function stopRec() {
+    if (!audio.keep) return; // 2回目以降の呼び出しは何もしない
+    clearInterval(recTimer); recTimer = null; audio.keep = false;
+    $('btnRecStop').disabled = true;
+    var elapsed = (performance.now() - recT0) / 1000;
+    var n = 0; audio.chunks.forEach(function (c) { n += c.length; });
+    var all = new Float32Array(n), o = 0;
+    audio.chunks.forEach(function (c) { all.set(c, o); o += c.length; });
+    audio.chunks = [];
+    var rate = audio.ctx.sampleRate;
+    closeMic();
+    // 録れた長さと経過時間が大きく違えば、録音の周波数の食い違いなどを疑う
+    var recSec = n / rate;
+    report.recordedSec = Number(recSec.toFixed(1)); report.elapsedSec = Number(elapsed.toFixed(1));
+    report.recorderMismatch = elapsed > 1 && Math.abs(recSec - elapsed) / elapsed > 0.1;
+    analyze(all, rate, 'mic');
+  }
+  $('btnRecStop').onclick = stopRec;
+
+  $('fileIn').onchange = function () {
+    var f = this.files && this.files[0];
+    if (!f || busy) return;
+    setBusy(true);
+    analyzeBuffer(f.arrayBuffer());
+    this.value = '';
+  };
+  // プレビュー用：?audio=ok.wav で同じ場所の音声を読む（GAS では使わない）
+  var PREVIEW_AUDIO = (location.search.match(/[?&]audio=([\w.-]+)/) || [])[1] || '';
+  window.runPreviewAudio = function () {
+    if (!PREVIEW_AUDIO) return 'no audio param';
+    if (busy || !asr) return 'busy or no model';
+    setBusy(true);
+    analyzeBuffer(fetch(PREVIEW_AUDIO).then(function (r) { return r.arrayBuffer(); }));
+    return 'started';
+  };
+  function analyzeBuffer(bufPromise) {
+    var ctx = audio.ctx || (audio.ctx = new (window.AudioContext || window.webkitAudioContext)());
+    bufPromise.then(function (buf) { return ctx.decodeAudioData(buf); }).then(function (ab) {
+      var ch = ab.getChannelData(0), mono = new Float32Array(ch.length);
+      for (var c = 0; c < ab.numberOfChannels; c++) { var d = ab.getChannelData(c); for (var i = 0; i < d.length; i++) mono[i] += d[i] / ab.numberOfChannels; }
+      delete report.recordedSec; delete report.elapsedSec; delete report.recorderMismatch;
+      analyze(mono, ab.sampleRate, 'file');
+    }).catch(function (e) {
+      $('readMsg').className = 'msg-err'; $('readMsg').textContent = '音声ファイルを読めませんでした（' + addError('file', e) + '）。';
+      setBusy(false);
+    });
+  }
+
+  // ---- 判定と表示 ----
+  var MIN_SEC = 3;
+  function analyze(raw, rate, source) {
+    var D = READING_DEFAULTS;
+    // 前の回の値を残さない
+    report.source = source; delete report.silent; delete report.tooShort;
+    report.audioSec = Number((raw.length / rate).toFixed(1));
+    if (report.audioSec < MIN_SEC) {
+      $('readMsg').className = 'msg-err'; $('readMsg').textContent = '録音が短すぎます（' + MIN_SEC + ' 秒未満）。もう一度読んでください。';
+      report.tooShort = true; resetRead(); stepEnd();
+      return;
+    }
+    // 重い計算の前に案内を出し、画面に描かせてから計算する
+    $('readMsg').className = 'small'; $('readMsg').textContent = '採点の準備をしています…（画面を閉じたり、別のアプリに切り替えたりしないでください）';
+    stepStart('asr');
+    setTimeout(function () {
+      var pcm = resampleTo16k_(raw, rate);
+      raw = null;
+      var rms = frameRms_(pcm, D.sampleRate, D.frameMs);
+      if (isMostlySilent_(rms, D.silenceDb, D.minVoicedRatio)) {
+        $('readMsg').className = 'msg-err'; $('readMsg').textContent = '声が届いていないようです。スマホを口から 20cm ほどにして、もう一度読んでください。';
+        report.silent = true; pcm = null; resetRead(); stepEnd();
+        return;
+      }
+      var pitch = toSemitones_(pitchTrack_(pcm, D.sampleRate));
+      var silences = findSilences_(rms, D.frameMs, D.silenceDb, D.pauseSec);
+      $('readMsg').textContent = '採点しています…（画面を閉じたり、別のアプリに切り替えたりしないでください）';
+      var t0 = performance.now();
+      asr.run(pcm).then(function (out) {
+        report.asrSec = Number(((performance.now() - t0) / 1000).toFixed(1));
+        report.rtf = Number((report.asrSec / report.audioSec).toFixed(2));
+        stepEnd();
+        show(out, pitch, silences);
+        resetRead();
+      }).catch(function (e) {
+        var msg = 'うまく採点できませんでした（' + addError('asr', e) + '）。';
+        if (e && (e.name === 'Timeout' || e.name === 'Terminated' || e.name === 'WorkerError')) {
+          // Worker を止めたので、モデルを読み込み直してもらう
+          if (asr && asr.terminate) asr.terminate();
+          asr = null;
+          $('loadMsg').className = 'msg-err'; $('loadMsg').textContent = 'モデルが止まりました。もう一度読み込んでください。';
+          $('loadBar').style.width = '0';
+          msg += 'もう一度モデルを読み込んでから読んでください。';
+        } else {
+          msg += 'もう一度読んでください。';
+        }
+        $('readMsg').className = 'msg-err'; $('readMsg').textContent = msg;
+        stepEnd(); resetRead();
+      });
+      pcm = null; // 録音はここで手放す（Worker に渡した分は Worker の中で捨てられる）
+    }, 50);
+  }
+  function resetRead() {
+    setBusy(false);
+    $('btnRecStop').disabled = true; $('recTime').textContent = '0.0 秒';
+  }
+  function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+
+  function show(out, pitch, silences) {
+    var chunks = (out && out.chunks) || [];
+    var words = [];
+    chunks.forEach(function (c) {
+      var ts = c.timestamp || [];
+      tokenize_(c.text).forEach(function (t) { words.push({ w: t, s: ts[0], e: ts[1] }); });
+    });
+    var al = alignWords_(tokenize_(PASSAGE), words.map(function (x) { return x.w; }));
+    var cnt = { ok: 0, mis: 0, omit: 0, insert: 0 };
+    al.forEach(function (a) { cnt[a.type]++; });
+    // 最初と最後の語の間にある無音（試作では句読点の位置も含めて数える）
+    // 最後の語の終わりの時刻が空のことがあるので、そのときは録音の長さを使う
+    var lastWord = words.length ? words[words.length - 1] : null;
+    var first = words.length && typeof words[0].s === 'number' ? words[0].s : 0;
+    var last = lastWord && typeof lastWord.e === 'number' ? lastWord.e : report.audioSec;
+    var inner = silences.filter(function (s) { return s.start > first && s.end < last; });
+    report.counts = cnt; report.refWords = tokenize_(PASSAGE).length; report.hypWords = words.length;
+    report.innerSilences = inner.length;
+    report.errorRate = Number(((cnt.mis + cnt.omit + cnt.insert) / report.refWords).toFixed(3));
+    report.wordTimestamps = words.length > 0 && words.every(function (x) { return typeof x.s === 'number'; });
+    report.at = localTime();
+
+    var rows = [['録音の長さ', report.audioSec + ' 秒'], ['採点にかかった時間', report.asrSec + ' 秒（録音の ' + report.rtf + ' 倍）'],
+      ['本文の語数／聞き取れた語数', report.refWords + ' ／ ' + report.hypWords],
+      ['一致・別の語・飛ばし・本文にない語', cnt.ok + '・' + cnt.mis + '・' + cnt.omit + '・' + cnt.insert],
+      ['途中の 0.6 秒以上の無音', inner.length + ' 回（句読点のあとの間も含む）'],
+      ['単語ごとの時刻', report.wordTimestamps ? '取れた' : '取れなかった']];
+    $('sumTable').innerHTML = rows.map(function (r) { return '<tr><th>' + r[0] + '</th><td>' + esc(r[1]) + '</td></tr>'; }).join('');
+    $('alignOut').innerHTML = al.map(function (a) {
+      if (a.type === 'ok') return esc(a.ref);
+      if (a.type === 'mis') return '<span class="w-mis" title="' + esc(a.hyp) + ' に聞こえた">' + esc(a.ref) + '</span>';
+      if (a.type === 'omit') return '<span class="w-omit">' + esc(a.ref) + '</span>';
+      return '<span class="w-insert">' + esc(a.hyp) + '</span>';
+    }).join(' ');
+    $('hypOut').textContent = (out && out.text) || '';
+    $('wordTable').innerHTML = words.map(function (x) {
+      return '<tr><td>' + esc(x.w) + '</td><td>' + (x.s != null ? x.s.toFixed(2) : '') + '</td><td>' + (x.e != null ? x.e.toFixed(2) : '') + '</td></tr>';
+    }).join('');
+    drawPitch(pitch);
+    $('reportOut').value = JSON.stringify(report, null, 1);
+    $('resCard').hidden = false;
+    $('readMsg').className = 'msg-ok'; $('readMsg').textContent = '採点しました。下の「5. 結果」を見てください。';
+    $('resCard').scrollIntoView({ behavior: 'smooth' });
+  }
+
+  function drawPitch(st) {
+    var pts = [];
+    for (var i = 0; i < st.length; i += 2) if (st[i] != null && Math.abs(st[i]) < 18) pts.push({ x: i / 100, y: st[i] });
+    $('pitchNote').textContent = '声のある点 ' + pts.length + ' 個';
+    if (typeof Chart === 'undefined') { $('pitchWrap').hidden = true; $('pitchNote').textContent += '（グラフを読み込めなかったので点の数だけ表示しています）'; return; }
+    if (chart) chart.destroy();
+    var css = getComputedStyle(document.documentElement);
+    chart = new Chart($('pitchChart'), {
+      type: 'scatter',
+      data: { datasets: [{ data: pts, pointRadius: 1.5, backgroundColor: css.getPropertyValue('--primary').trim() }] },
+      options: { animation: false, maintainAspectRatio: false, plugins: { legend: { display: false } },
+        scales: { x: { title: { display: true, text: '秒' } }, y: { title: { display: true, text: '半音' } } } }
+    });
+  }
+
+  $('btnCopy').onclick = function () {
+    var t = $('reportOut').value;
+    (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function () {
+      $('copyMsg').textContent = 'コピーしました。';
+    }).catch(function () {
+      $('reportOut').select(); $('copyMsg').textContent = 'コピーできなかったので、下の文字を選んでコピーしてください。';
+    });
+  };
+
+  fillDevice();
+  showLastStep();
+})();
+</script>
+</body>
+</html>
