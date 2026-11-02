@@ -496,8 +496,12 @@ function alignWords_(ref, hyp) {
     $('btnRec').disabled = b || !asr;
     $('fileIn').disabled = b || !asr;
     $('btnMic').disabled = b || !!audio.stream;
-    $('btnLoad').disabled = b || !!asr;
+    // 読み込んだものと違うモデル・方式・精度を選んだら、読み込み直せるようにする
+    $('btnLoad').disabled = b || (!!asr && loadedKey === selectedKey());
   }
+  var loadedKey = '';
+  function selectedKey() { return $('selModel').value + '|' + $('selDevice').value + '|' + $('selDtype').value; }
+  ['selModel', 'selDevice', 'selDtype'].forEach(function (id) { $(id).onchange = function () { setBusy(busy); }; });
   function micErrorText(e) {
     var t = addError('mic', e);
     if (e && e.name === 'NotAllowedError') t += '\nマイクの許可が出ていないか、この枠の中では許可できません。ブラウザの設定でマイクを許可して、もう一度押してください。';
@@ -613,7 +617,7 @@ function alignWords_(ref, hyp) {
     function finish(runner) {
       var sec = (performance.now() - t0) / 1000, T = 0;
       Object.keys(files).forEach(function (k) { T += files[k].total; });
-      asr = runner;
+      asr = runner; loadedKey = opt.model + '|' + opt.device + '|' + opt.dtype;
       report.model = opt.model.split('/')[1]; report.modelDevice = opt.device; report.dtype = opt.dtype;
       report.runner = runner.runner; report.modelMB = Number((T / 1048576).toFixed(1)); report.loadSec = Number(sec.toFixed(1));
       $('loadBar').style.width = '100%';
@@ -626,10 +630,14 @@ function alignWords_(ref, hyp) {
     function fail(e) {
       $('loadMsg').className = 'msg-err';
       $('loadMsg').textContent = '読み込めませんでした（' + addError('load', e) + '）。Wi-Fi を確かめて、もう一度押してください。';
-      $('btnLoad').disabled = false;
+      setBusy(false);
       stepEnd();
     }
-    $('btnLoad').disabled = true; $('loadMsg').className = 'small'; $('loadMsg').textContent = '準備しています…';
+    // 前に読み込んだモデルを止めてから（メモリを二重に使わない）
+    if (asr && asr.terminate) asr.terminate();
+    asr = null; loadedKey = '';
+    setBusy(true);
+    $('loadMsg').className = 'small'; $('loadMsg').textContent = '準備しています…'; $('loadBar').style.width = '0';
     stepStart('load');
     if (FAKE === 'modelFail') { fail({ name: 'NetworkError', message: '（プレビューの偽の失敗）Failed to fetch' }); return; }
     var w;
