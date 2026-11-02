@@ -105,6 +105,9 @@
       <button id="btnMic">マイクを試す</button>
       <button id="btnMicStop" class="sub" disabled>止める</button>
     </div>
+    <div class="row">
+      <label class="small"><input type="checkbox" id="chkRaw"> 音声処理（雑音抑制・エコー除去・自動音量）を切る（比べるため）</label>
+    </div>
     <div class="meter" aria-label="音量"><div id="meterBar"></div></div>
     <p id="micMsg" class="small">押すと、マイクの許可を求めます。</p>
   </section>
@@ -440,7 +443,9 @@ function alignWords_(ref, hyp) {
     closeMic(); // すでに開いていれば閉じてから（マイクを二重に開かない）
     audio.ctx = audio.ctx || new (window.AudioContext || window.webkitAudioContext)();
     return audio.ctx.resume().then(function () {
-      return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      var on = !$('chkRaw').checked;
+      report.audioProcessing = on;
+      return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: on, noiseSuppression: on, autoGainControl: on } });
     }).then(function (stream) {
       audio.stream = stream;
       audio.src = audio.ctx.createMediaStreamSource(stream);
@@ -527,6 +532,8 @@ function alignWords_(ref, hyp) {
     });
   };
   $('btnMicStop').onclick = function () { closeMic(); };
+  // 音声処理の設定を変えたら、次に開くときに反映されるようマイクを閉じる
+  $('chkRaw').onchange = function () { if (!busy) closeMic(); };
 
   // ---- 3. モデルを読み込む（Web Worker。作れなければ画面のスレッド）----
   var WORKER_SRC = [
@@ -800,6 +807,8 @@ function alignWords_(ref, hyp) {
     var last = lastWord && typeof lastWord.e === 'number' ? lastWord.e : report.audioSec;
     var inner = silences.filter(function (s) { return s.start > first && s.end < last; });
     report.counts = cnt; report.refWords = tokenize_(PASSAGE).length; report.hypWords = words.length;
+    // 誤りとされた語（本文の語と聞こえた語の組だけ。書き起こしの全文は入れない）
+    report.errorWords = al.filter(function (a) { return a.type !== 'ok'; }).map(function (a) { return a.type + ':' + (a.ref || '') + '>' + (a.hyp || ''); });
     report.innerSilences = inner.length;
     report.errorRate = Number(((cnt.mis + cnt.omit + cnt.insert) / report.refWords).toFixed(3));
     report.wordTimestamps = words.length > 0 && words.every(function (x) { return typeof x.s === 'number'; });
